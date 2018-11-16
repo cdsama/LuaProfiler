@@ -265,7 +265,7 @@ struct auto_time
         }
         else
         {
-            function_time_data_t this_function_data = parent;
+            function_time_data_t this_function_data = nullptr;
             if (event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL)
             {
                 auto itr = parent->children.find(function_name);
@@ -304,6 +304,20 @@ struct auto_time
                     {
                         auto &top = function_data_stack.top();
                         top.children_coroutine_time += (begin_time - top.call_end_time);
+                        function_time_data_t coroutine_function_data = nullptr;
+                        std::string coroutine_function_name = "coroutine";
+                        auto itr = top.node->children.find(coroutine_function_name);
+                        if (itr == top.node->children.end())
+                        {
+                            coroutine_function_data = std::make_shared<function_time_data>();
+                            coroutine_function_data->function_name = coroutine_function_name;
+                            top.node->children.insert({coroutine_function_name, coroutine_function_data});
+                        }
+                        else
+                        {
+                            coroutine_function_data = itr->second;
+                        }
+                        coroutine_function_data->children_time += top.children_coroutine_time;
                     }
                 }
                 // for mismatch after error or return before yield
