@@ -362,6 +362,7 @@ struct auto_time
                             coroutine_function_data = itr->second;
                         }
                         coroutine_function_data->children_time += top.children_coroutine_time;
+                        coroutine_function_data->count++;
                     }
                 }
                 // for mismatch after error or return before yield
