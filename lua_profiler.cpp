@@ -363,6 +363,8 @@ struct auto_time
                         }
                         coroutine_function_data->children_time += top.children_coroutine_time;
                         coroutine_function_data->count++;
+                        pd->max_function_name_length = std::max(pd->max_function_name_length,
+                                                                (function_data_stack.size() + 1) * 4 + coroutine_function_name.length());
                     }
                 }
                 // for mismatch after error or return before yield
@@ -403,40 +405,55 @@ struct auto_time
     }
 };
 
-// TODO: change to loop from recursion
-void print_tree(std::ostream &os, const function_time_data_t &root, size_t max_name_length, size_t max_stack, size_t current_Stack = 0)
+void print_tree(std::ostream &os, const function_time_data_t &root, size_t max_name_length, size_t max_stack)
 {
-    max_name_length = std::_Max_value((size_t)10, max_name_length);
-    std::string indent = current_Stack == 0 ? "" : fmt::format(fmt::format("{{:{}}}", current_Stack * 4), "");
-    std::string align = fmt::format(fmt::format("{{:{}}}", (max_name_length - current_Stack * 4 - root->function_name.length())), "");
+    max_name_length = std::max((size_t)10, max_name_length);
+    std::stack<function_time_data_t> stack;
+    size_t current_stack = 0;
+    stack.push(root);
 
-    os << fmt::format("{}{}{} count:{:>6} self:{:<16} children:{:<16} total:{:<20} fid:{:<20}",
-                      indent,
-                      root->function_name,
-                      align,
-                      root->count,
-                      root->self_time.count(),
-                      root->children_time.count(),
-                      root->total_time.count(),
-                      root->function_source)
-       << std::endl;
-    if (root->children.empty())
+    while (!stack.empty())
     {
-        return;
-    }
+        auto current = stack.top();
+        stack.pop();
 
-    if (max_stack > 0 && max_stack < current_Stack)
-    {
-        return;
-    }
+        if (current == nullptr)
+        {
+            --current_stack;
+            continue;
+        }
 
-    std::vector<std::pair<std::string, function_time_data_t>> sortable_children(root->children.begin(), root->children.end());
-    std::sort(sortable_children.begin(), sortable_children.end(), [](const auto &l, const auto &r) {
-        return l.second->total_time > r.second->total_time;
-    });
-    for (auto &i : sortable_children)
-    {
-        print_tree(os, i.second, max_name_length, max_stack, current_Stack + 1);
+        std::string indent = current_stack == 0 ? "" : fmt::format(fmt::format("{{:{}}}", current_stack * 4), "");
+        std::string align = fmt::format(fmt::format("{{:{}}}", (max_name_length - current_stack * 4 - current->function_name.length())), "");
+
+        os << fmt::format("{}{}{} count:{:<10} total:{:<20} self:{:<16} children:{:<16}",
+                          indent,
+                          current->function_name,
+                          align,
+                          current->count,
+                          current->total_time.count(),
+                          current->self_time.count(),
+                          current->children_time.count())
+           << std::endl;
+        if (current->children.empty())
+        {
+            continue;
+        }
+
+        if (max_stack > 0 && max_stack < current_stack)
+        {
+            continue;
+        }
+        std::vector<std::pair<std::string, function_time_data_t>> sortable_children(current->children.begin(), current->children.end());
+        std::sort(sortable_children.begin(), sortable_children.end(), [](const auto &l, const auto &r) {
+            return l.second->total_time < r.second->total_time;
+        });
+        stack.push(nullptr);
+        for (auto &i : sortable_children)
+        {
+            stack.push(i.second);
+        }
+        ++current_stack;
     }
 }
 
