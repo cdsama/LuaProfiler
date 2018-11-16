@@ -8,17 +8,19 @@
 #include <sstream>
 #include <fmt/format.h>
 #include <lua.hpp>
+#include <thread>
 
 using namespace std::chrono;
 using time_unit_t = std::chrono::nanoseconds;
-using time_point_t = steady_clock::time_point;
+using record_clock_t = steady_clock;
+using time_point_t = record_clock_t::time_point;
 
-static bool is_main_thread(lua_State *L)
+static lua_State *get_main_thread(lua_State *L)
 {
     lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
     auto main_L = lua_tothread(L, -1);
     lua_pop(L, 1);
-    return main_L == L;
+    return main_L;
 }
 
 using function_time_data_t = std::shared_ptr<struct function_time_data>;
@@ -28,9 +30,9 @@ struct function_time_data
     std::unordered_map<std::string, function_time_data_t> children;
     std::string function_name = "root";
     std::string function_source = "";
-    time_unit_t self_time = time_unit_t(0);
-    time_unit_t children_time = time_unit_t(0);
-    time_unit_t total_time = time_unit_t(0);
+    time_unit_t self_time = {};
+    time_unit_t children_time = {};
+    time_unit_t total_time = {};
     size_t count = 0;
 };
 
@@ -38,10 +40,11 @@ struct function_stack_node
 {
     std::string function_name = "";
     std::string function_source = "";
-    time_point_t call_begin_time = time_point_t(time_unit_t(0));
-    time_point_t call_end_time = time_point_t(time_unit_t(0));
-    time_unit_t children_tool_time = time_unit_t(0);
-    time_unit_t children_pure_time = time_unit_t(0);
+    time_point_t call_begin_time = {};
+    time_point_t call_end_time = {};
+    time_unit_t children_tool_time = {};
+    time_unit_t children_pure_time = {};
+    // time_unit_t children_coroutine_time = {};
     function_time_data_t node = nullptr;
 };
 
@@ -51,8 +54,9 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
     // this_all = this_tool_time + children + children_tool_time + self
     // this_sub = children_tooltime + self + children
     auto tool_total_time = current_top.call_end_time - current_top.call_begin_time + current_top.children_tool_time;
+    // auto coroutine_time = current_top.children_coroutine_time;
     auto sub_time = begin_time - current_top.call_end_time;
-    auto pure_sub_time = sub_time - current_top.children_tool_time;
+    auto pure_sub_time = sub_time - current_top.children_tool_time; //- coroutine_time;
     auto self_time = pure_sub_time - current_top.children_pure_time;
     current_top.node->children_time += current_top.children_pure_time;
     current_top.node->self_time += self_time;
@@ -61,6 +65,7 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
     {
         data_stack.top().children_tool_time += tool_total_time;
         data_stack.top().children_pure_time += pure_sub_time;
+        // data_stack.top().children_coroutine_time += coroutine_time;
     }
 }
 
@@ -68,10 +73,19 @@ struct profile_data
 {
     function_time_data_t root = std::make_shared<function_time_data>();
     std::stack<function_stack_node> main_thread_stack;
-    std::unordered_map<const lua_State *, std::stack<function_stack_node>> coroutine_stack_map;
-    // const lua_State *last_thread = nullptr;
+    std::unordered_map<lua_State *, std::stack<function_stack_node>> coroutine_stack_map;
+    lua_State *last_thread_of_hook = nullptr;
+    lua_State *last_thread = nullptr;
+    lua_State *main_thread = nullptr;
     size_t max_function_name_length = 0;
     size_t max_stack_length = 0;
+    time_point_t last_tool_begin = {};
+    time_point_t last_tool_end = {};
+
+    bool is_main_thread(lua_State *L) const
+    {
+        return main_thread == L;
+    }
 
     void calculate_total_time()
     {
@@ -92,7 +106,7 @@ struct profile_data
     void calculate_root_time()
     {
         calculate_total_time();
-        root->children_time = time_unit_t(0);
+        root->children_time = {};
         for (auto &&i : root->children)
         {
             root->children_time += i.second->total_time;
@@ -155,7 +169,9 @@ static std::shared_ptr<profile_data> get_or_new_pd_from_lua(lua_State *L)
         }
         lua_setmetatable(L, -2);
         lua_rawsetp(L, LUA_REGISTRYINDEX, profile_data::reg_key());
-        // pd->last_thread = L;
+        pd->last_thread_of_hook = L;
+        pd->last_thread = L;
+        pd->main_thread = get_main_thread(L);
     }
     else
     {
@@ -194,26 +210,56 @@ struct auto_time
 
     auto_time(lua_State *_L)
     {
-        begin_time = steady_clock::now();
+        begin_time = record_clock_t::now();
         L = _L;
     }
     ~auto_time()
     {
         std::shared_ptr<profile_data> pd = get_or_new_pd_from_lua(L);
 
+        scope_on_exit _([&]() {
+            pd->last_thread_of_hook = L;
+
+            if (function_name.empty() || event == LUA_HOOKRET)
+            {
+                pd->last_tool_begin = begin_time;
+                pd->last_tool_end = record_clock_t::now();
+            }
+            else
+            {
+                pd->last_tool_begin = {};
+                pd->last_tool_end = {};
+                auto &call_end_time = pd->get_function_data_stack(L).top().call_end_time;
+                call_end_time = record_clock_t::now();
+            }
+        });
+
+        if (L != pd->last_thread_of_hook)
+        {
+            pd->last_thread = pd->last_thread_of_hook;
+        }
+
         // std::cout << std::endl
-        //           << fmt::format("f:{:<50}    e:{} l:{} mt:{} tc:{}",
+        //           << fmt::format("f:{:<50}    e:{} l:{} mt:{} tc:{} ll:{}",
         //                          function_name,
         //                          event,
         //                          (const void *)L,
-        //                          is_main_thread(L),
-        //                          is_tail_call)
+        //                          pd->is_main_thread(L),
+        //                          is_tail_call,
+        //                          (const void *)pd->last_thread)
         //           << std::endl;
-        // scope_on_exit _([&]() { pd->last_thread = L; });
+
+        {   // delay calculate tool time
+            auto &function_data_stack = pd->get_function_data_stack(pd->last_thread_of_hook);
+            if (!function_data_stack.empty())
+            {
+                function_data_stack.top().children_tool_time += (pd->last_tool_end - pd->last_tool_begin);
+                // std::cout << function_data_stack.top().function_name << "*************" << (pd->last_tool_end - pd->last_tool_begin).count() << std::endl;
+            }
+        }
+
         function_time_data_t parent = nullptr;
-
         auto &function_data_stack = pd->get_function_data_stack(L);
-
         if (function_data_stack.empty())
         {
             if (function_name.empty())
@@ -228,7 +274,7 @@ struct auto_time
         }
         if (function_name.empty())
         {
-            function_data_stack.top().children_tool_time += (steady_clock::now() - begin_time);
+            // function_data_stack.top().children_tool_time += (record_clock_t::now() - begin_time);
             return;
         }
         else
@@ -261,12 +307,10 @@ struct auto_time
                 function_data_stack.push(node);
                 pd->max_function_name_length = std::max(pd->max_function_name_length,
                                                         function_data_stack.size() * 4 + function_name.length());
-                function_data_stack.top().call_end_time = steady_clock::now();
                 return;
             }
             else
             {
-
                 // for mismatch after error or return before yield
                 while ((!function_data_stack.empty()) &&
                        (function_data_stack.top().function_source != function_source))
@@ -301,16 +345,19 @@ struct auto_time
                     calculate_time(function_data_stack, begin_time);
                 }
 
-                if (!function_data_stack.empty())
-                {
-                    function_data_stack.top().children_tool_time += (steady_clock::now() - begin_time);
-                }
+                // if (!function_data_stack.empty())
+                // {
+                //     function_data_stack.top().children_tool_time += (record_clock_t::now() - begin_time);
+                // }
             }
         }
     }
 };
+
+// TODO: change to loop from recursion
 void print_tree(std::ostream &os, const function_time_data_t &root, size_t max_name_length, size_t max_stack, size_t current_Stack = 0)
 {
+    max_name_length = std::_Max_value((size_t)10, max_name_length);
     std::string indent = current_Stack == 0 ? "" : fmt::format(fmt::format("{{:{}}}", current_Stack * 4), "");
     std::string align = fmt::format(fmt::format("{{:{}}}", (max_name_length - current_Stack * 4 - root->function_name.length())), "");
 
