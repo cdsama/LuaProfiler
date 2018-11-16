@@ -25,6 +25,22 @@ static lua_State *get_main_thread(lua_State *L)
 
 using function_time_data_t = std::shared_ptr<struct function_time_data>;
 
+struct scope_on_exit
+{
+    std::function<void()> on_exit;
+    scope_on_exit(std::function<void()> _on_exit)
+        : on_exit(_on_exit)
+    {
+    }
+    ~scope_on_exit()
+    {
+        if (on_exit != nullptr)
+        {
+            on_exit();
+        }
+    }
+};
+
 struct function_time_data
 {
     std::unordered_map<std::string, function_time_data_t> children;
@@ -74,6 +90,7 @@ struct profile_data
     function_time_data_t root = std::make_shared<function_time_data>();
     std::stack<function_stack_node> main_thread_stack;
     std::unordered_map<lua_State *, std::stack<function_stack_node>> coroutine_stack_map;
+    std::unordered_map<lua_State *, std::string> coroutine_name_map;
     lua_State *last_thread_of_hook = nullptr;
     lua_State *last_thread = nullptr;
     lua_State *main_thread = nullptr;
@@ -85,6 +102,43 @@ struct profile_data
     bool is_main_thread(lua_State *L) const
     {
         return main_thread == L;
+    }
+
+    std::string get_coroutine_name(lua_State *L)
+    {
+        scope_on_exit _([&]() {
+            if (!is_main_thread(L))
+            {
+                if (auto itr = coroutine_stack_map.find(L); itr != coroutine_stack_map.end())
+                {
+                    if (itr->second.empty())
+                    {
+                        coroutine_stack_map.erase(itr);
+                        if (auto itr = coroutine_name_map.find(L); itr != coroutine_name_map.end())
+                        {
+                            coroutine_name_map.erase(itr);
+                        }
+                    }
+                }
+                else
+                {
+                    if (auto itr = coroutine_name_map.find(L); itr != coroutine_name_map.end())
+                    {
+                        coroutine_name_map.erase(itr);
+                    }
+                }
+            }
+        });
+        if (is_main_thread(L))
+        {
+            return "mainthread";
+        }
+
+        if (auto itr = coroutine_name_map.find(L); itr != coroutine_name_map.end())
+        {
+            return itr->second;
+        }
+        return "coroutine:[?]";
     }
 
     void calculate_total_time()
@@ -114,7 +168,7 @@ struct profile_data
         root->total_time = root->children_time;
     }
 
-    std::stack<function_stack_node> &get_function_data_stack(lua_State *L)
+    std::stack<function_stack_node> &get_function_data_stack(lua_State *L, std::string *name = nullptr)
     {
         if (is_main_thread(L))
         {
@@ -128,6 +182,12 @@ struct profile_data
         else
         {
             coroutine_stack_map.insert({L, std::stack<function_stack_node>()});
+            if (name == nullptr)
+            {
+                static std::stack<function_stack_node> dummy;
+                return dummy;
+            }
+            coroutine_name_map.insert({L, fmt::format("coroutine:{}", *name)});
             return coroutine_stack_map[L];
         }
     }
@@ -183,22 +243,6 @@ static std::shared_ptr<profile_data> get_or_new_pd_from_lua(lua_State *L)
     return pd;
 }
 
-struct scope_on_exit
-{
-    std::function<void()> on_exit;
-    scope_on_exit(std::function<void()> _on_exit)
-        : on_exit(_on_exit)
-    {
-    }
-    ~scope_on_exit()
-    {
-        if (on_exit != nullptr)
-        {
-            on_exit();
-        }
-    }
-};
-
 struct auto_time
 {
     time_point_t begin_time;
@@ -239,25 +283,25 @@ struct auto_time
             pd->last_thread = pd->last_thread_of_hook;
         }
 
-        std::cout << std::endl
-                  << fmt::format("f:{:<50}    e:{} l:{} mt:{:5} tc:{:5} ll:{}",
-                                 function_name,
-                                 event,
-                                 (const void *)L,
-                                 pd->is_main_thread(L),
-                                 is_tail_call,
-                                 (const void *)pd->last_thread)
-                  << std::endl;
+        // std::cout << std::endl
+        //           << fmt::format("f:{:<50}    e:{} l:{} mt:{:5} tc:{:5} ll:{}",
+        //                          function_name,
+        //                          event,
+        //                          (const void *)L,
+        //                          pd->is_main_thread(L),
+        //                          is_tail_call,
+        //                          (const void *)pd->last_thread)
+        //           << std::endl;
 
         // delay calculate tool time
-        if (auto &function_data_stack = pd->get_function_data_stack(pd->last_thread_of_hook); !function_data_stack.empty())
+        if (auto &last_function_data_stack = pd->get_function_data_stack(pd->last_thread_of_hook); !last_function_data_stack.empty())
         {
-            function_data_stack.top().children_tool_time += (pd->last_tool_end - pd->last_tool_begin);
+            last_function_data_stack.top().children_tool_time += (pd->last_tool_end - pd->last_tool_begin);
             // std::cout << function_data_stack.top().function_name << "*************" << (pd->last_tool_end - pd->last_tool_begin).count() << std::endl;
         }
 
         function_time_data_t parent = nullptr;
-        auto &function_data_stack = pd->get_function_data_stack(L);
+        auto &function_data_stack = pd->get_function_data_stack(L, &function_name);
         parent = function_data_stack.empty() ? pd->root : function_data_stack.top().node;
         if (function_name.empty())
         {
@@ -305,7 +349,7 @@ struct auto_time
                         auto &top = function_data_stack.top();
                         top.children_coroutine_time += (begin_time - top.call_end_time);
                         function_time_data_t coroutine_function_data = nullptr;
-                        std::string coroutine_function_name = "coroutine";
+                        std::string coroutine_function_name = pd->get_coroutine_name(pd->last_thread_of_hook);
                         auto itr = top.node->children.find(coroutine_function_name);
                         if (itr == top.node->children.end())
                         {
@@ -365,7 +409,7 @@ void print_tree(std::ostream &os, const function_time_data_t &root, size_t max_n
     std::string indent = current_Stack == 0 ? "" : fmt::format(fmt::format("{{:{}}}", current_Stack * 4), "");
     std::string align = fmt::format(fmt::format("{{:{}}}", (max_name_length - current_Stack * 4 - root->function_name.length())), "");
 
-    os << fmt::format("{}{}{} count:{:>6} self:{:<10} children:{:<10} total:{:<15} fid:{:<20}",
+    os << fmt::format("{}{}{} count:{:>6} self:{:<16} children:{:<16} total:{:<20} fid:{:<20}",
                       indent,
                       root->function_name,
                       align,
