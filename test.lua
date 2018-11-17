@@ -61,11 +61,7 @@ local yield = function(...)
     return coroutine.yield(...)
 end
 
-local resume = coroutine.resume
-
-local yield = coroutine.yield
-
---- simple co
+---- simple co
 
 local cofunc = function (a)
     sleep()
@@ -89,8 +85,7 @@ print(r)
 
 function foo(a)
 	print("foo", a)
-    yield(2 * a)
-    return
+    return yield(2 * a)
 end
 
 local cobodyfunction = function ( a, b )
@@ -113,7 +108,7 @@ print("main", resume(co, "x", "y"))
 print("main", resume(co2, "x", "y"))
 print("main", coroutine.resume(co, "x", "y"))
 
---- tail call
+---- tail call
 local tc = nil
 tc = function(param)
     if(param < 0) then
@@ -123,3 +118,27 @@ tc = function(param)
     return tc(param - 1)
 end
 print(tc(5))
+
+---- another tail call
+local h = function()
+    print("h")
+    return "h";
+end
+
+local i = function()
+    return h()
+end
+
+local j = function()
+    return i()
+end
+
+local k = function()
+    return j()
+end
+
+local l = function()
+    return k()
+end
+
+print(l())

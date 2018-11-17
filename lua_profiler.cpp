@@ -62,9 +62,10 @@ struct function_stack_node
     time_unit_t children_pure_time = {};
     time_unit_t children_coroutine_time = {};
     function_time_data_t node = nullptr;
+    bool is_tail_call = false;
 };
 
-static void calculate_time(std::stack<function_stack_node> &data_stack, const time_point_t &begin_time)
+static void calculate_time(std::stack<function_stack_node> &data_stack, const time_point_t &begin_time, bool &is_tail_call_popped)
 {
     auto &current_top = data_stack.top();
     // this_all = this_tool_time + children + children_tool_time + self
@@ -76,6 +77,7 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
     auto self_time = pure_sub_time - current_top.children_pure_time;
     current_top.node->children_time += current_top.children_pure_time;
     current_top.node->self_time += self_time;
+    is_tail_call_popped = current_top.is_tail_call;
     data_stack.pop();
     if (!data_stack.empty())
     {
@@ -250,7 +252,7 @@ struct auto_time
     std::string function_name = "";
     std::string function_source = "";
     int event = -1;
-    bool is_tail_call = false;
+    // bool is_tail_call = false;
 
     auto_time(lua_State *_L)
     {
@@ -284,12 +286,11 @@ struct auto_time
         }
 
         // std::cout << std::endl
-        //           << fmt::format("f:{:<50}    e:{} l:{} mt:{:5} tc:{:5} ll:{}",
+        //           << fmt::format("f:{:<50}    e:{} l:{} mt:{:5} ll:{}",
         //                          function_name,
         //                          event,
         //                          (const void *)L,
         //                          pd->is_main_thread(L),
-        //                          is_tail_call,
         //                          (const void *)pd->last_thread)
         //           << std::endl;
 
@@ -333,6 +334,7 @@ struct auto_time
                 node.function_source = function_source;
                 node.call_begin_time = begin_time;
                 node.node = this_function_data;
+                node.is_tail_call = (event == LUA_HOOKTAILCALL);
                 this_function_data->count++;
                 function_data_stack.push(node);
                 pd->max_function_name_length = std::max(pd->max_function_name_length,
@@ -368,11 +370,12 @@ struct auto_time
                     }
                 }
                 // for mismatch after error or return before yield
+                bool is_tail_call_popped = false;
                 while ((!function_data_stack.empty()) &&
                        (function_data_stack.top().function_source != function_source))
                 {
                     // std::cout << function_source << "++++++++++++++++++++++++++" << function_data_stack.top().function_source << std::endl;
-                    calculate_time(function_data_stack, begin_time);
+                    calculate_time(function_data_stack, begin_time, is_tail_call_popped);
                 }
 
                 // for mismatch right after sethook
@@ -387,18 +390,13 @@ struct auto_time
                     assert(function_data_stack.top().function_source == function_source);
                 }
 
-                // for taill call
+                // for taill call and normal ret
+                assert(is_tail_call_popped == false);
                 while ((!function_data_stack.empty()) &&
-                       is_tail_call &&
-                       (function_data_stack.top().function_source == function_source))
+                       ((function_data_stack.top().function_source == function_source) || is_tail_call_popped))
                 {
                     // std::cout << function_source << "-------------------------" << function_data_stack.top().function_source << std::endl;
-                    calculate_time(function_data_stack, begin_time);
-                }
-
-                if (!is_tail_call)
-                {
-                    calculate_time(function_data_stack, begin_time);
+                    calculate_time(function_data_stack, begin_time, is_tail_call_popped);
                 }
             }
         }
@@ -468,7 +466,7 @@ int profile_report_tree(lua_State *L)
     auto pd = get_or_new_pd_from_lua(L);
     pd->calculate_root_time();
     std::ostringstream os;
-    print_tree(os, pd->root, pd->max_function_name_length + 2, 0);
+    print_tree(os, pd->root, pd->max_function_name_length + 4, 0);
     lua_pushstring(L, os.str().c_str());
     return 1;
 }
@@ -488,11 +486,11 @@ void profile_hooker(lua_State *L, lua_Debug *ar)
                                   ar->name == nullptr ? "?" : ar->name,
                                   ar->short_src,
                                   ar->linedefined);
-    if (t.event == LUA_HOOKRET)
-    {
-        lua_getinfo(L, "t", ar);
-        t.is_tail_call = ar->istailcall;
-    }
+    // if (t.event == LUA_HOOKRET)
+    // {
+    //     lua_getinfo(L, "t", ar);
+    //     t.is_tail_call = ar->istailcall;
+    // }
     if (is_c_function)
     {
         lua_getinfo(L, "f", ar);
@@ -506,6 +504,29 @@ void profile_hooker(lua_State *L, lua_Debug *ar)
                                         ar->short_src,
                                         ar->linedefined);
     }
+}
+
+int profile_report_info(lua_State *L)
+{
+    auto pd = get_or_new_pd_from_lua(L);
+    std::ostringstream os;
+    os << fmt::format("[info]  max_function_name_length:{}",
+                      pd->max_function_name_length);
+    os << fmt::format(" main_stack_size:{}",
+                      pd->main_thread_stack.size());
+
+    size_t id = 0;
+    for (auto &&i : pd->coroutine_stack_map)
+    {
+        os << fmt::format(" thread[{}]_size:{}",
+                          id,
+                          i.second.size());
+        ++id;
+    }
+
+    os << std::endl;
+    lua_pushstring(L, os.str().c_str());
+    return 1;
 }
 
 int profile_start(lua_State *L)
@@ -534,6 +555,7 @@ int new_lib_profiler(lua_State *L)
                             {"stop", profile_stop},
                             {"clear", profile_clear},
                             {"report_tree", profile_report_tree},
+                            {"report_info", profile_report_info},
                             {nullptr, nullptr}};
     luaL_setfuncs(L, lib_funcs, 0);
     return 1;

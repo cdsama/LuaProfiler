@@ -31,7 +31,7 @@ int main(int argc, char const *argv[])
         lua_call(L, 0, 0);
         auto duration = steady_clock::now() - begin;
         std::cout << "test finished in " << duration.count() << " ns" << std::endl;
-        if (luaL_dostring(L, "profiler.start()"))
+        if (luaL_dostring(L, "profiler = require(\"profiler\")  profiler.start()"))
         {
             std::cout << lua_tostring(L, -1) << std::endl;
         }
