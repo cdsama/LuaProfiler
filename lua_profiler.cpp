@@ -346,6 +346,13 @@ struct auto_time
                 if (L != pd->last_thread_of_hook)
                 {
                     // std::cout << "maybe it's the time" << function_name << std::endl;
+                    auto status = lua_status(pd->last_thread_of_hook);
+                    std::cout << "###########################"
+                              << fmt::format("thread:{} status:{} ismain:{}",
+                                             (const void*)pd->last_thread_of_hook,
+                                             status,
+                                             pd->is_main_thread(pd->last_thread_of_hook))
+                              << std::endl;
                     if (!function_data_stack.empty())
                     {
                         auto &top = function_data_stack.top();
@@ -374,15 +381,14 @@ struct auto_time
                 while ((!function_data_stack.empty()) &&
                        (function_data_stack.top().function_source != function_source))
                 {
-                    // std::cout << function_source << "++++++++++++++++++++++++++" << function_data_stack.top().function_source << std::endl;
+                    std::cout << function_source << "++++++++++++" << function_data_stack.top().function_name << "++++++++++++++" << function_data_stack.top().function_source << std::endl;
                     calculate_time(function_data_stack, begin_time, is_tail_call_popped);
                 }
 
-                // for mismatch right after sethook
                 if (function_data_stack.empty())
                 {
                     // pd->root = std::make_shared<function_time_data>();
-                    // std::cout << "**************************" << std::endl;
+                    std::cout << "**************************" << std::endl;
                     return;
                 }
                 else
@@ -390,10 +396,11 @@ struct auto_time
                     assert(function_data_stack.top().function_source == function_source);
                 }
 
-                // for taill call and normal ret
                 assert(is_tail_call_popped == false);
-                while ((!function_data_stack.empty()) &&
-                       ((function_data_stack.top().function_source == function_source) || is_tail_call_popped))
+                // for normal ret
+                calculate_time(function_data_stack, begin_time, is_tail_call_popped);
+                // for taill call
+                while ((!function_data_stack.empty()) && is_tail_call_popped)
                 {
                     // std::cout << function_source << "-------------------------" << function_data_stack.top().function_source << std::endl;
                     calculate_time(function_data_stack, begin_time, is_tail_call_popped);
