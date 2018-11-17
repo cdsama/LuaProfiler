@@ -541,6 +541,6 @@ int new_lib_profiler(lua_State *L)
 
 int luaopen_profiler(lua_State *L)
 {
-    luaL_requiref(L, "profiler", new_lib_profiler, 1);
+    luaL_requiref(L, "profiler", new_lib_profiler, 0);
     return 0;
 }

@@ -1,1 +1,1 @@
-extern int luaopen_profiler(struct lua_State *L);
+extern int luaopen_profiler(lua_State *L);
