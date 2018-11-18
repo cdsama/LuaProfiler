@@ -108,6 +108,25 @@ print("main", resume(co, "x", "y"))
 print("main", resume(co2, "x", "y"))
 print("main", coroutine.resume(co, "x", "y"))
 
+---- coroutine with error
+
+local cobodyerror = function ( a, b )
+	print("co-body", a, b)
+	local r = foo(a + 1)
+	print("co-body", r)
+	local r, s = yield(a + b, a - b)
+    print("co-body", r, s)
+    error("opps")
+	return b, "end"
+end
+
+co3 = coroutine.create(cobodyerror)
+
+print("main", resume(co3, 1, 10))
+print("main", resume(co3, "r"))
+print("main", resume(co3, "x", "y"))
+
+
 ---- tail call
 local tc = nil
 tc = function(param)
