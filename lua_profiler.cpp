@@ -23,6 +23,40 @@ static lua_State *get_main_thread(lua_State *L)
     return main_L;
 }
 
+static bool is_couroutine_dead(lua_State *L, lua_State *co)
+{
+    if (L == co)
+    {
+        return false; // running
+    }
+    else
+    {
+        switch (lua_status(co))
+        {
+        case LUA_YIELD:
+            return false; // suspended
+        case LUA_OK:
+        {
+            lua_Debug ar;
+            if (lua_getstack(co, 0, &ar) > 0)
+            {
+                return false; // running
+            }
+            else if (lua_gettop(co) == 0)
+            {
+                return true; // dead
+            }
+            else
+            {
+                return false; // dead
+            }
+        }
+        default:
+            return true; // dead with error
+        }
+    }
+}
+
 using function_time_data_t = std::shared_ptr<struct function_time_data>;
 
 struct scope_on_exit
@@ -345,14 +379,25 @@ struct auto_time
             {
                 if (L != pd->last_thread_of_hook)
                 {
-                    // std::cout << "maybe it's the time" << function_name << std::endl;
                     auto status = lua_status(pd->last_thread_of_hook);
-                    std::cout << "###########################"
-                              << fmt::format("thread:{} status:{} ismain:{}",
-                                             (const void*)pd->last_thread_of_hook,
-                                             status,
-                                             pd->is_main_thread(pd->last_thread_of_hook))
-                              << std::endl;
+                    // std::cout << "###########################"
+                    //           << fmt::format("thread:{} status:{} ismain:{} isdead:{}",
+                    //                          (const void *)pd->last_thread_of_hook,
+                    //                          status,
+                    //                          pd->is_main_thread(pd->last_thread_of_hook),
+                    //                          is_couroutine_dead(L, pd->last_thread_of_hook))
+                    //           << std::endl;
+
+                    if (is_couroutine_dead(L, pd->last_thread_of_hook))
+                    {
+                        auto &last_function_data_stack = pd->get_function_data_stack(pd->last_thread_of_hook);
+                        bool is_tail_call_popped = false;
+                        while (!last_function_data_stack.empty())
+                        {
+                            calculate_time(last_function_data_stack, begin_time, is_tail_call_popped);
+                        }
+                    }
+
                     if (!function_data_stack.empty())
                     {
                         auto &top = function_data_stack.top();
@@ -381,14 +426,13 @@ struct auto_time
                 while ((!function_data_stack.empty()) &&
                        (function_data_stack.top().function_source != function_source))
                 {
-                    std::cout << function_source << "++++++++++++" << function_data_stack.top().function_name << "++++++++++++++" << function_data_stack.top().function_source << std::endl;
+                    // std::cout << function_source << "++++++++++++" << function_data_stack.top().function_name << "++++++++++++++" << function_data_stack.top().function_source << std::endl;
                     calculate_time(function_data_stack, begin_time, is_tail_call_popped);
                 }
 
                 if (function_data_stack.empty())
                 {
-                    // pd->root = std::make_shared<function_time_data>();
-                    std::cout << "**************************" << std::endl;
+                    // std::cout << "**************************" << std::endl;
                     return;
                 }
                 else
@@ -410,7 +454,7 @@ struct auto_time
     }
 };
 
-void print_tree(std::ostream &os, const function_time_data_t &root, size_t max_name_length, size_t max_stack)
+static void print_tree(std::ostream &os, const function_time_data_t &root, size_t max_name_length, size_t max_stack)
 {
     max_name_length = std::max((size_t)10, max_name_length);
     std::stack<function_time_data_t> stack;
@@ -462,7 +506,7 @@ void print_tree(std::ostream &os, const function_time_data_t &root, size_t max_n
     }
 }
 
-int profile_report_tree(lua_State *L)
+static int profile_report_tree(lua_State *L)
 {
     size_t max_stack = 0;
     if (lua_gettop(L) > 0 && lua_isinteger(L, 1))
@@ -478,7 +522,7 @@ int profile_report_tree(lua_State *L)
     return 1;
 }
 
-void profile_hooker(lua_State *L, lua_Debug *ar)
+static void profile_hooker(lua_State *L, lua_Debug *ar)
 {
     auto_time t(L);
     lua_getinfo(L, "Sn", ar);
@@ -513,7 +557,7 @@ void profile_hooker(lua_State *L, lua_Debug *ar)
     }
 }
 
-int profile_report_info(lua_State *L)
+static int profile_report_info(lua_State *L)
 {
     auto pd = get_or_new_pd_from_lua(L);
     std::ostringstream os;
@@ -536,26 +580,26 @@ int profile_report_info(lua_State *L)
     return 1;
 }
 
-int profile_start(lua_State *L)
+static int profile_start(lua_State *L)
 {
     lua_sethook(L, profile_hooker, LUA_MASKCALL | LUA_MASKRET, 0);
     return 0;
 }
 
-int profile_stop(lua_State *L)
+static int profile_stop(lua_State *L)
 {
     lua_sethook(L, nullptr, 0, 0);
     return 0;
 }
 
-int profile_clear(lua_State *L)
+static int profile_clear(lua_State *L)
 {
     lua_pushnil(L);
     lua_rawsetp(L, LUA_REGISTRYINDEX, profile_data::reg_key());
     return 0;
 }
 
-int new_lib_profiler(lua_State *L)
+static int new_lib_profiler(lua_State *L)
 {
     lua_newtable(L);
     luaL_Reg lib_funcs[] = {{"start", profile_start},
