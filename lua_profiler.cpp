@@ -97,25 +97,25 @@ struct function_time_data
 };
 
 template <sort_t sort_type = sort_t::self_time>
-static bool function_time_data_sort(const function_time_data_t &l, const function_time_data_t &r)
+bool function_time_data_sort(const function_time_data_t &l, const function_time_data_t &r)
 {
     return l->self_time < r->self_time;
 }
 
 template <>
-static bool function_time_data_sort<sort_t::children_time>(const function_time_data_t &l, const function_time_data_t &r)
+bool function_time_data_sort<sort_t::children_time>(const function_time_data_t &l, const function_time_data_t &r)
 {
     return l->children_time < r->children_time;
 }
 
 template <>
-static bool function_time_data_sort<sort_t::total_time>(const function_time_data_t &l, const function_time_data_t &r)
+bool function_time_data_sort<sort_t::total_time>(const function_time_data_t &l, const function_time_data_t &r)
 {
     return l->total_time < r->total_time;
 }
 
 template <>
-static bool function_time_data_sort<sort_t::add_time>(const function_time_data_t &l, const function_time_data_t &r)
+bool function_time_data_sort<sort_t::add_time>(const function_time_data_t &l, const function_time_data_t &r)
 {
     return l->self_time + l->children_time < r->self_time + r->children_time;
 }
@@ -159,7 +159,7 @@ static void traverse_tree(function_time_data_t &root, size_t max_stack, on_trave
 
         if constexpr (sort_type == sort_t::none)
         {
-            for (auto &child : current->children)
+            for (auto &&child : current->children)
             {
                 stack.push(child.second);
             }
@@ -168,12 +168,12 @@ static void traverse_tree(function_time_data_t &root, size_t max_stack, on_trave
         {
             std::vector<function_time_data_t> sortable_children;
             sortable_children.reserve(current->children.size());
-            for (auto &child : current->children)
+            for (auto &&child : current->children)
             {
                 sortable_children.push_back(child.second);
             }
             std::sort(sortable_children.begin(), sortable_children.end(), function_time_data_sort<sort_type>);
-            for (auto &i : sortable_children)
+            for (auto &&i : sortable_children)
             {
                 stack.push(i);
             }
@@ -217,6 +217,7 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
 }
 
 static size_t per_indent_length = 4;
+static size_t space_after_name = 4;
 struct profile_data
 {
     function_time_data_t root = std::make_shared<function_time_data>();
@@ -283,7 +284,7 @@ struct profile_data
             auto &current = stack.top();
             stack.pop();
 
-            for (auto &child : current->children)
+            for (auto &&child : current->children)
             {
                 stack.push(child.second);
             }
@@ -294,7 +295,7 @@ struct profile_data
     {
         calculate_total_time(max_stack);
         root->children_time = {};
-        for (auto &i : root->children)
+        for (auto &&i : root->children)
         {
             root->children_time += i.second->total_time;
         }
@@ -609,9 +610,10 @@ static void print_tree(std::ostream &os, function_time_data_t &root, size_t max_
     });
 }
 
-static void print_list(std::ostream &os, function_time_data_t &root, size_t max_name_length, size_t max_top)
+static void print_list(std::ostream &os, function_time_data_t &root, size_t max_top)
 {
     std::unordered_map<std::string, function_time_data> source_map;
+    size_t max_function_name_length = 0;
     traverse_tree<sort_t::none>(root, 0, [&](function_time_data_t &current, size_t current_stack) {
         if (current->function_source.empty())
         {
@@ -625,6 +627,7 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
             data.function_source = current->function_source;
             source_map.insert({current->function_source, data});
             itr = source_map.find(current->function_source);
+            max_function_name_length = std::max(max_function_name_length, current->function_name.length());
         }
         else
         {
@@ -632,6 +635,7 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
             if (function_name != current->function_name && (function_name.find("?:") == 0))
             {
                 function_name = current->function_name; // for a better name;
+                max_function_name_length = std::max(max_function_name_length, current->function_name.length());
             }
         }
         auto &data = itr->second;
@@ -640,12 +644,34 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
         data.children_time += current->children_time;
         data.total_time += (current->self_time + current->children_time);
     });
-    std::vector<function_time_data*> sortable_data;
+    std::vector<function_time_data *> sortable_data;
     sortable_data.reserve(source_map.size());
-    
-}
 
-static size_t space_after_name = 4;
+    for (auto &&i : source_map)
+    {
+        sortable_data.push_back(&i.second);
+    }
+    std::sort(sortable_data.begin(), sortable_data.end(), [](function_time_data *l, function_time_data *r) {
+        return l->total_time > r->total_time;
+    });
+
+    if (max_top > 0 && max_top < sortable_data.size())
+    {
+        sortable_data.resize(max_top);
+    }
+
+    for (auto &&i : sortable_data)
+    {
+        std::string function_name = fmt::format(fmt::format("{{:{}}}", max_function_name_length + space_after_name), i->function_name);
+        os << fmt::format("{} count:{:<10} total:{:<20} self:{:<16} children:{:<16}",
+                          function_name,
+                          i->count,
+                          i->total_time.count(),
+                          i->self_time.count(),
+                          i->children_time.count())
+           << std::endl;
+    }
+}
 
 static int profile_report_tree(lua_State *L)
 {
@@ -660,6 +686,21 @@ static int profile_report_tree(lua_State *L)
     std::ostringstream os;
     auto max_function_name_length = pd->get_max_function_name_length(max_stack);
     print_tree(os, pd->root, max_function_name_length + space_after_name, max_stack);
+    lua_pushstring(L, os.str().c_str());
+    return 1;
+}
+
+static int profile_report_list(lua_State *L)
+{
+    size_t max_top = 0;
+    if (lua_gettop(L) > 0 && lua_isinteger(L, 1))
+    {
+        max_top = std::abs(lua_tointeger(L, 1));
+    }
+
+    auto pd = get_or_new_pd_from_lua(L);
+    std::ostringstream os;
+    print_list(os, pd->root, max_top);
     lua_pushstring(L, os.str().c_str());
     return 1;
 }
@@ -683,6 +724,13 @@ static int profile_report_to_file(lua_State *L)
         auto max_function_name_length = pd->get_max_function_name_length(max_limit);
         print_tree(os, pd->root, max_function_name_length + space_after_name, max_limit);
     }
+    else if (report_type == "list")
+    {
+        auto pd = get_or_new_pd_from_lua(L);
+        std::string file_name = fmt::format("{}.lua_profile_list.txt", record_clock_t::now().time_since_epoch().count());
+        std::ofstream os(file_name);
+        print_list(os, pd->root, max_limit);
+    }
 
     return 0;
 }
@@ -694,7 +742,7 @@ static int profile_report_info(lua_State *L)
     os << fmt::format(" main_stack_size:{}",
                       pd->main_thread_stack.size());
     size_t id = 0;
-    for (auto &i : pd->coroutine_stack_map)
+    for (auto &&i : pd->coroutine_stack_map)
     {
         os << fmt::format(" thread[{}]_size:{}",
                           id,
@@ -733,6 +781,7 @@ static int new_lib_profiler(lua_State *L)
                             {"stop", profile_stop},
                             {"clear", profile_clear},
                             {"report_tree", profile_report_tree},
+                            {"report_list", profile_report_list},
                             {"report_to_file", profile_report_to_file},
                             {"report_info", profile_report_info},
                             {nullptr, nullptr}};

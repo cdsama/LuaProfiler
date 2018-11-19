@@ -2,3 +2,5 @@ build/
 .vscode/
 res.txt
 *.lua_profile_tree.txt
+*.lua_profile_list.txt
+*.lua_profile_json.txt
