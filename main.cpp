@@ -46,6 +46,10 @@ int main(int argc, char const *argv[])
         {
             std::cout << lua_tostring(L, -1) << std::endl;
         }
+        if (luaL_dostring(L, "print(profiler.report_to_file(\"tree\"))"))
+        {
+            std::cout << lua_tostring(L, -1) << std::endl;
+        }
         if (luaL_dostring(L, "print(profiler.report_tree(4))"))
         {
             std::cout << lua_tostring(L, -1) << std::endl;

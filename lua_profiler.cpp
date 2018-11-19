@@ -6,14 +6,15 @@
 #include <functional>
 #include <iostream>
 #include <sstream>
+#include <fstream>
 #include <fmt/format.h>
 #include <lua.hpp>
 #include <thread>
 
 using namespace std::chrono;
-using time_unit_t = std::chrono::nanoseconds;
 using record_clock_t = high_resolution_clock;
 using time_point_t = record_clock_t::time_point;
+using time_unit_t = record_clock_t::duration;
 
 static lua_State *get_main_thread(lua_State *L)
 {
@@ -215,6 +216,7 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
     }
 }
 
+static size_t per_indent_length = 4;
 struct profile_data
 {
     function_time_data_t root = std::make_shared<function_time_data>();
@@ -333,7 +335,7 @@ struct profile_data
     {
         size_t max_function_name_length = 0;
         traverse_tree<sort_t::none>(root, max_stack, [&](function_time_data_t &current, size_t current_statck) {
-            max_function_name_length = std::max(max_function_name_length, (current->function_name.length() + current_statck * 4));
+            max_function_name_length = std::max(max_function_name_length, (current->function_name.length() + current_statck * per_indent_length));
         });
         return max_function_name_length;
     }
@@ -554,11 +556,42 @@ struct auto_time
     }
 };
 
+static void profile_hooker(lua_State *L, lua_Debug *ar)
+{
+    auto_time t(L);
+    lua_getinfo(L, "Sn", ar);
+    t.event = ar->event;
+    bool is_c_function = (std::strcmp("C", ar->what) == 0);
+    if (is_c_function && (ar->name == nullptr))
+    {
+        // a internal c function ?
+        return;
+    }
+    t.function_name = fmt::format("{}:{}:{}",
+                                  ar->name == nullptr ? "?" : ar->name,
+                                  ar->short_src,
+                                  ar->linedefined);
+
+    if (is_c_function)
+    {
+        lua_getinfo(L, "f", ar);
+        t.function_source = fmt::format("c:{}",
+                                        lua_topointer(L, -1));
+        lua_pop(L, 1);
+    }
+    else
+    {
+        t.function_source = fmt::format("lua:{}:{}",
+                                        ar->short_src,
+                                        ar->linedefined);
+    }
+}
+
 static void print_tree(std::ostream &os, function_time_data_t &root, size_t max_name_length, size_t max_stack)
 {
 
     traverse_tree<sort_t::total_time>(root, max_stack, [&](function_time_data_t &current, size_t current_stack) {
-        size_t intent_length = current_stack * 4;
+        size_t intent_length = current_stack * per_indent_length;
         std::string indent = current_stack == 0 ? "" : fmt::format(fmt::format("{{:{}}}", intent_length), "");
         size_t intent_name_length = intent_length + current->function_name.length();
         size_t align_length = max_name_length > intent_name_length ? (max_name_length - intent_name_length) : 2;
@@ -576,6 +609,8 @@ static void print_tree(std::ostream &os, function_time_data_t &root, size_t max_
     });
 }
 
+static size_t space_after_name = 4;
+
 static int profile_report_tree(lua_State *L)
 {
     size_t max_stack = 0;
@@ -588,44 +623,32 @@ static int profile_report_tree(lua_State *L)
     pd->calculate_root_time(max_stack);
     std::ostringstream os;
     auto max_function_name_length = pd->get_max_function_name_length(max_stack);
-    print_tree(os, pd->root, max_function_name_length + 4, max_stack);
+    print_tree(os, pd->root, max_function_name_length + space_after_name, max_stack);
     lua_pushstring(L, os.str().c_str());
     return 1;
 }
 
-static void profile_hooker(lua_State *L, lua_Debug *ar)
+static int profile_report_to_file(lua_State *L)
 {
-    auto_time t(L);
-    lua_getinfo(L, "Sn", ar);
-    t.event = ar->event;
-    bool is_c_function = (std::strcmp("C", ar->what) == 0);
-    if (is_c_function && (ar->name == nullptr))
+    std::string report_type = luaL_checkstring(L, 1); // tree/list/json
+
+    size_t max_limit = 0; // max stack for tree or max top for list, 0 means no limit
+    if (lua_gettop(L) > 1 && lua_isinteger(L, 2))
     {
-        // a internal c function ?
-        return;
+        max_limit = std::abs(lua_tointeger(L, 2));
     }
-    t.function_name = fmt::format("{}:{}:{}",
-                                  ar->name == nullptr ? "?" : ar->name,
-                                  ar->short_src,
-                                  ar->linedefined);
-    // if (t.event == LUA_HOOKRET)
-    // {
-    //     lua_getinfo(L, "t", ar);
-    //     t.is_tail_call = ar->istailcall;
-    // }
-    if (is_c_function)
+
+    if (report_type == "tree")
     {
-        lua_getinfo(L, "f", ar);
-        t.function_source = fmt::format("c:{}",
-                                        lua_topointer(L, -1));
-        lua_pop(L, 1);
+        auto pd = get_or_new_pd_from_lua(L);
+        pd->calculate_root_time(max_limit);
+        std::string file_name = fmt::format("{}.lua_profile_tree.txt",record_clock_t::now().time_since_epoch().count());
+        std::ofstream os(file_name);
+        auto max_function_name_length = pd->get_max_function_name_length(max_limit);
+        print_tree(os, pd->root, max_function_name_length + space_after_name, max_limit);
     }
-    else
-    {
-        t.function_source = fmt::format("lua:{}:{}",
-                                        ar->short_src,
-                                        ar->linedefined);
-    }
+
+    return 0;
 }
 
 static int profile_report_info(lua_State *L)
@@ -674,6 +697,7 @@ static int new_lib_profiler(lua_State *L)
                             {"stop", profile_stop},
                             {"clear", profile_clear},
                             {"report_tree", profile_report_tree},
+                            {"report_to_file", profile_report_to_file},
                             {"report_info", profile_report_info},
                             {nullptr, nullptr}};
     luaL_setfuncs(L, lib_funcs, 0);
