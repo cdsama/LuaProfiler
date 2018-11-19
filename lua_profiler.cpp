@@ -609,6 +609,42 @@ static void print_tree(std::ostream &os, function_time_data_t &root, size_t max_
     });
 }
 
+static void print_list(std::ostream &os, function_time_data_t &root, size_t max_name_length, size_t max_top)
+{
+    std::unordered_map<std::string, function_time_data> source_map;
+    traverse_tree<sort_t::none>(root, 0, [&](function_time_data_t &current, size_t current_stack) {
+        if (current->function_source.empty())
+        {
+            return;
+        }
+        auto itr = source_map.find(current->function_source);
+        if (itr == source_map.end())
+        {
+            function_time_data data;
+            data.function_name = current->function_name;
+            data.function_source = current->function_source;
+            source_map.insert({current->function_source, data});
+            itr = source_map.find(current->function_source);
+        }
+        else
+        {
+            auto &function_name = itr->second.function_name;
+            if (function_name != current->function_name && (function_name.find("?:") == 0))
+            {
+                function_name = current->function_name; // for a better name;
+            }
+        }
+        auto &data = itr->second;
+        data.count += current->count;
+        data.self_time += current->self_time;
+        data.children_time += current->children_time;
+        data.total_time += (current->self_time + current->children_time);
+    });
+    std::vector<function_time_data*> sortable_data;
+    sortable_data.reserve(source_map.size());
+    
+}
+
 static size_t space_after_name = 4;
 
 static int profile_report_tree(lua_State *L)
@@ -642,7 +678,7 @@ static int profile_report_to_file(lua_State *L)
     {
         auto pd = get_or_new_pd_from_lua(L);
         pd->calculate_root_time(max_limit);
-        std::string file_name = fmt::format("{}.lua_profile_tree.txt",record_clock_t::now().time_since_epoch().count());
+        std::string file_name = fmt::format("{}.lua_profile_tree.txt", record_clock_t::now().time_since_epoch().count());
         std::ofstream os(file_name);
         auto max_function_name_length = pd->get_max_function_name_length(max_limit);
         print_tree(os, pd->root, max_function_name_length + space_after_name, max_limit);
