@@ -10,11 +10,13 @@
 #include <fmt/format.h>
 #include <lua.hpp>
 #include <thread>
+#include <nlohmann/json.hpp>
 
 using namespace std::chrono;
 using record_clock_t = high_resolution_clock;
 using time_point_t = record_clock_t::time_point;
 using time_unit_t = record_clock_t::duration;
+using json = nlohmann::json;
 
 static lua_State *get_main_thread(lua_State *L)
 {
@@ -676,6 +678,40 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
     }
 }
 
+static std::string children_key = "children";
+
+static void print_json(std::ostream &os, function_time_data_t &root)
+{
+    json j = json::object();
+    std::stack<json::value_type *> parent_stack;
+    parent_stack.push(&j);
+
+    traverse_tree<sort_t::total_time>(root, 0, [&](function_time_data_t &current, size_t current_stack) {
+        size_t parent_size = current_stack + 1;
+        json currentj = json::object();
+        currentj["function_name"] = current->function_name;
+        currentj["function_source"] = current->function_source;
+        currentj["count"] = current->count;
+        currentj["self_time"] = current->self_time.count();
+        currentj["children_time"] = current->children_time.count();
+        currentj["total_time"] = current->total_time.count();
+
+        while (parent_stack.size() > parent_size)
+        {
+            parent_stack.pop();
+        }
+
+        auto &parent_children = (*parent_stack.top())[children_key];
+        if (parent_children.is_null())
+        {
+            parent_children = json::array();
+        }
+        parent_children.push_back(currentj);
+        parent_stack.push(&parent_children.back());
+    });
+    os << j[children_key][0].dump(); // serialize from root;
+}
+
 static int profile_report_tree(lua_State *L)
 {
     size_t max_stack = 0;
@@ -733,6 +769,14 @@ static int profile_report_to_file(lua_State *L)
         std::string file_name = fmt::format("{}.lua_profile_list.txt", record_clock_t::now().time_since_epoch().count());
         std::ofstream os(file_name);
         print_list(os, pd->root, max_limit);
+    }
+    else if (report_type == "json")
+    {
+        auto pd = get_or_new_pd_from_lua(L);
+        pd->calculate_root_time(0);
+        std::string file_name = fmt::format("{}.lua_profile_json.txt", record_clock_t::now().time_since_epoch().count());
+        std::ofstream os(file_name);
+        print_json(os, pd->root);
     }
 
     return 0;
