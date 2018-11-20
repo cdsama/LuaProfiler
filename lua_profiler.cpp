@@ -10,13 +10,16 @@
 #include <fmt/format.h>
 #include <lua.hpp>
 #include <thread>
-#include <nlohmann/json.hpp>
+// #include <nlohmann/json.hpp>
+#include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
 using namespace std::chrono;
 using record_clock_t = high_resolution_clock;
 using time_point_t = record_clock_t::time_point;
 using time_unit_t = record_clock_t::duration;
-using json = nlohmann::json;
+// using json = nlohmann::json;
 
 static lua_State *get_main_thread(lua_State *L)
 {
@@ -95,7 +98,7 @@ struct function_time_data
     time_unit_t self_time = {};
     time_unit_t children_time = {};
     time_unit_t total_time = {};
-    size_t count = 0;
+    uint64_t count = 0;
 };
 
 template <sort_t sort_type = sort_t::self_time>
@@ -680,36 +683,81 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
 
 static std::string children_key = "children";
 
+// static void print_json(std::ostream &os, function_time_data_t &root)
+// {
+//     json j = json::object();
+//     std::stack<json::value_type *> parent_stack;
+//     parent_stack.push(&j);
+
+//     traverse_tree<sort_t::total_time>(root, 0, [&](function_time_data_t &current, size_t current_stack) {
+//         size_t parent_size = current_stack + 1;
+//         json currentj = json::object();
+//         currentj["function_name"] = current->function_name;
+//         currentj["function_source"] = current->function_source;
+//         currentj["count"] = current->count;
+//         currentj["self_time"] = current->self_time.count();
+//         currentj["children_time"] = current->children_time.count();
+//         currentj["total_time"] = current->total_time.count();
+
+//         while (parent_stack.size() > parent_size)
+//         {
+//             parent_stack.pop();
+//         }
+
+//         auto &parent_children = (*parent_stack.top())[children_key];
+//         if (parent_children.is_null())
+//         {
+//             parent_children = json::array();
+//         }
+//         parent_children.push_back(currentj);
+//         parent_stack.push(&parent_children.back());
+//     });
+//     os << j[children_key][0].dump(); // serialize from root;
+// }
 static void print_json(std::ostream &os, function_time_data_t &root)
 {
-    json j = json::object();
-    std::stack<json::value_type *> parent_stack;
+    using namespace rapidjson;
+    using jvar = Document::ValueType;
+    using json = Document;
+    json j(kObjectType);
+    auto &a = j.GetAllocator();
+    std::stack<jvar *> parent_stack;
     parent_stack.push(&j);
 
     traverse_tree<sort_t::total_time>(root, 0, [&](function_time_data_t &current, size_t current_stack) {
         size_t parent_size = current_stack + 1;
-        json currentj = json::object();
-        currentj["function_name"] = current->function_name;
-        currentj["function_source"] = current->function_source;
-        currentj["count"] = current->count;
-        currentj["self_time"] = current->self_time.count();
-        currentj["children_time"] = current->children_time.count();
-        currentj["total_time"] = current->total_time.count();
+        jvar currentj(kObjectType);
+        currentj.AddMember("function_name", jvar(current->function_name.c_str(), a), a);
+        currentj.AddMember("function_source", jvar(current->function_source.c_str(), a), a);
+        currentj.AddMember("count", jvar(current->count), a);
+        currentj.AddMember("self_time", current->self_time.count(), a);
+        currentj.AddMember("children_time", current->children_time.count(), a);
+        currentj.AddMember("total_time", current->total_time.count(), a);
 
         while (parent_stack.size() > parent_size)
         {
             parent_stack.pop();
         }
-
-        auto &parent_children = (*parent_stack.top())[children_key];
-        if (parent_children.is_null())
+        auto &parent = *parent_stack.top();
+        auto parent_children_itr = parent.FindMember(children_key.c_str());
+        jvar *parent_children = nullptr;
+        if (parent_children_itr == parent.MemberEnd())
         {
-            parent_children = json::array();
+            jvar children_array(kArrayType);
+            parent.AddMember(jvar(children_key.c_str(), a), children_array, a);
+            parent_children = &(parent[jvar(children_key.c_str(), a)]);
         }
-        parent_children.push_back(currentj);
-        parent_stack.push(&parent_children.back());
+        else
+        {
+            parent_children = &parent_children_itr->value;
+        }
+        parent_children->PushBack(currentj, a);
+        parent_stack.push(&((*parent_children)[parent_children->Size() - 1]));
     });
-    os << j[children_key][0].dump(); // serialize from root;
+    StringBuffer buffer;
+    Writer<StringBuffer> writer(buffer);
+    j[jvar(children_key.c_str(), a)][0].Accept(writer);// serialize from root;
+    os << buffer.GetString(); 
 }
 
 static int profile_report_tree(lua_State *L)
