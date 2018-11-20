@@ -627,7 +627,6 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
             data.function_source = current->function_source;
             source_map.insert({current->function_source, data});
             itr = source_map.find(current->function_source);
-            max_function_name_length = std::max(max_function_name_length, current->function_name.length());
         }
         else
         {
@@ -635,7 +634,6 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
             if (function_name != current->function_name && (function_name.find("?:") == 0))
             {
                 function_name = current->function_name; // for a better name;
-                max_function_name_length = std::max(max_function_name_length, current->function_name.length());
             }
         }
         auto &data = itr->second;
@@ -658,6 +656,11 @@ static void print_list(std::ostream &os, function_time_data_t &root, size_t max_
     if (max_top > 0 && max_top < sortable_data.size())
     {
         sortable_data.resize(max_top);
+    }
+
+    for (auto &&i : sortable_data)
+    {
+        max_function_name_length = std::max(max_function_name_length, i->function_name.length());
     }
 
     for (auto &&i : sortable_data)
