@@ -80,8 +80,8 @@ class MainWindow(QMainWindow):
                                           str(current["self_time"]),
                                           str(current["children_time"])])
             current_total_time = current["total_time"]
-            color = 0
-            if current_total_time < total_time:
+            color = 255
+            if current_total_time <= total_time and current_total_time > 0:
                 color = 255*(1 - math.sqrt(current_total_time / total_time))
             brush = QBrush(QColor(255, color, color))
             item.setBackground(0, brush)
