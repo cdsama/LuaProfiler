@@ -1,0 +1,5 @@
+[MASTER]
+extension-pkg-whitelist=PySide2
+
+[TYPECHECK]
+ignored-classes=Signal

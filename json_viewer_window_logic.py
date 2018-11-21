@@ -10,6 +10,14 @@ from PySide2.QtWidgets import QHeaderView, QMainWindow, QTreeWidgetItem
 from json_viewer_window import Ui_MainWindow
 
 
+def on_item_double_clicked(item):
+    """ expand all children item """
+    if not item.isExpanded():
+        while item.childCount() != 0:
+            item = item.child(0)
+            item.setExpanded(True)
+
+
 class MainWindow(QMainWindow):
     """ main window logic class """
 
@@ -27,6 +35,8 @@ class MainWindow(QMainWindow):
              "Children (nanoseconds)"])
         self.setAcceptDrops(True)
         self.top_item = None
+        self.ui_window.treeWidget.itemDoubleClicked.connect(
+            on_item_double_clicked)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         mime_data = event.mimeData()
@@ -69,7 +79,7 @@ class MainWindow(QMainWindow):
                                           str(current["total_time"]),
                                           str(current["self_time"]),
                                           str(current["children_time"])])
-            for column_index in [1,2,3,4]:
+            for column_index in [1, 2, 3, 4]:
                 item.setTextAlignment(column_index, Qt.AlignRight)
             if current_stack == 0:
                 self.ui_window.treeWidget.addTopLevelItem(item)
