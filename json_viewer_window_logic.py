@@ -2,11 +2,10 @@
 
 
 import json
-
+import math
 from PySide2.QtCore import Qt
-from PySide2.QtGui import QDragEnterEvent, QDropEvent
+from PySide2.QtGui import QDragEnterEvent, QDropEvent, QBrush, QColor
 from PySide2.QtWidgets import QHeaderView, QMainWindow, QTreeWidgetItem
-
 from json_viewer_window import Ui_MainWindow
 
 
@@ -66,6 +65,7 @@ class MainWindow(QMainWindow):
         item_stack = []
         current_stack = 0
         stack.append(root)
+        total_time = root["total_time"]
         while stack:
             current = stack.pop()
             if current is None:
@@ -79,8 +79,15 @@ class MainWindow(QMainWindow):
                                           str(current["total_time"]),
                                           str(current["self_time"]),
                                           str(current["children_time"])])
+            current_total_time = current["total_time"]
+            color = 0
+            if current_total_time < total_time:
+                color = 255*(1 - math.sqrt(current_total_time / total_time))
+            brush = QBrush(QColor(255, color, color))
+            item.setBackground(0, brush)
             for column_index in [1, 2, 3, 4]:
                 item.setTextAlignment(column_index, Qt.AlignRight)
+                item.setBackground(column_index, brush)
             if current_stack == 0:
                 self.ui_window.treeWidget.addTopLevelItem(item)
                 self.top_item = item

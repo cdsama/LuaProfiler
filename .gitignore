@@ -5,3 +5,5 @@ res.txt
 *.lua_profile_list.txt
 *.lua_profile_json.txt
 __pycache__/
+dist/
+json_viewer_main.spec
