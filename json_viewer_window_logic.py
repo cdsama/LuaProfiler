@@ -2,8 +2,10 @@
 
 
 import json
-from PySide2.QtWidgets import QMainWindow, QHeaderView, QTreeWidgetItem
+
+from PySide2.QtCore import Qt
 from PySide2.QtGui import QDragEnterEvent, QDropEvent
+from PySide2.QtWidgets import QHeaderView, QMainWindow, QTreeWidgetItem
 
 from json_viewer_window import Ui_MainWindow
 
@@ -67,6 +69,8 @@ class MainWindow(QMainWindow):
                                           str(current["total_time"]),
                                           str(current["self_time"]),
                                           str(current["children_time"])])
+            for column_index in [1,2,3,4]:
+                item.setTextAlignment(column_index, Qt.AlignRight)
             if current_stack == 0:
                 self.ui_window.treeWidget.addTopLevelItem(item)
                 self.top_item = item

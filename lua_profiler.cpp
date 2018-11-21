@@ -756,8 +756,8 @@ static void print_json(std::ostream &os, function_time_data_t &root)
     });
     StringBuffer buffer;
     Writer<StringBuffer> writer(buffer);
-    j[jvar(children_key.c_str(), a)][0].Accept(writer);// serialize from root;
-    os << buffer.GetString(); 
+    j[jvar(children_key.c_str(), a)][0].Accept(writer); // serialize from root;
+    os << buffer.GetString();
 }
 
 static int profile_report_tree(lua_State *L)
