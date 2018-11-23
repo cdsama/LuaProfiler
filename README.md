@@ -10,9 +10,29 @@ Target version : lua 5.3
 * cmake
 * vcpkg
     - fmtlib
+    - rapidjson
     - lua
 
+Add this below to settings in vscode to link deps library as static:
+```json
+"cmake.configureArgs": [
+        "-DVCPKG_TARGET_TRIPLET=x64-windows-static"
+    ],
+```
+click Configure button or use cmake command line tool:
+
+```sh
+mkdir build
+cd build
+cmake .. -G "Visual Studio 15 2017 Win64" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+
+```
+
 ### build
+
+In vscode with cmake extension just press `F7`.
+
+or
 
 ```sh
 mkdir build
@@ -59,11 +79,15 @@ luaprofiler.clear()
 
 --[[ 
     report profiling result to file
-    it will save it at the current work directory
+    it will save it at the current working directory
+    the first part of file name is timestamp
 ]]--
 luaprofiler.report_to_file("json")
+-- *.lua_profile_json.txt
 luaprofiler.report_to_file("list")
+-- *.lua_profile_list.txt
 luaprofiler.report_to_file("tree")
+-- *.lua_profile_tree.txt
 
 ```
 
@@ -82,7 +106,7 @@ pyinstaller json_viewer_main.py -w -F
 
 just drag `*.lua_profile_json.txt` to main window.
 
->Tips: Installing `everything` on windows helps to find file instantly.
+>Tips: Installing `everything` on windows helps to find files instantly.
 
 #### Expand stack
 1. click on the arrow to expand/fold stack
