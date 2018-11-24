@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <stack>
 #include <functional>
+#include <memory>
 #include <iostream>
 #include <sstream>
 #include <fstream>
@@ -89,7 +90,6 @@ struct scope_on_exit
         }
     }
 };
-
 struct function_time_data
 {
     std::unordered_map<std::string, function_time_data_t> children;
@@ -192,6 +192,7 @@ struct function_stack_node
     std::string function_source = "";
     time_point_t call_begin_time = {};
     time_point_t call_end_time = {};
+    time_point_t last_record_time = {};
     time_unit_t children_tool_time = {};
     time_unit_t children_pure_time = {};
     time_unit_t children_coroutine_time = {};
@@ -215,20 +216,33 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
     data_stack.pop();
     if (!data_stack.empty())
     {
-        data_stack.top().children_tool_time += tool_total_time;
-        data_stack.top().children_pure_time += pure_sub_time;
-        data_stack.top().children_coroutine_time += coroutine_time;
+        auto &top = data_stack.top();
+        top.children_tool_time += tool_total_time;
+        top.children_pure_time += pure_sub_time;
+        top.children_coroutine_time += coroutine_time;
     }
 }
 
 static size_t per_indent_length = 4;
 static size_t space_after_name = 4;
-struct profile_data
+
+static const char *profile_data_metatable_name = "profile_data_metatable";
+static const char *coroutine_stack_metatable_name = "coroutine_stack_metatable";
+static const char *weak_table_metatable_name = "profile_data_weak_table_metatable";
+
+struct coroutine_stack_userdata
+{
+    std::stack<function_stack_node> coroutine_stack;
+    std::string coroutine_name;
+    std::weak_ptr<struct profile_data> pd;
+};
+
+static int coroutine_stack_userdata_gc(lua_State *L);
+
+struct profile_data : std::enable_shared_from_this<profile_data>
 {
     function_time_data_t root = std::make_shared<function_time_data>();
     std::stack<function_stack_node> main_thread_stack;
-    std::unordered_map<lua_State *, std::stack<function_stack_node>> coroutine_stack_map;
-    std::unordered_map<lua_State *, std::string> coroutine_name_map;
     lua_State *last_thread_of_hook = nullptr;
     lua_State *last_thread = nullptr;
     lua_State *main_thread = nullptr;
@@ -242,37 +256,27 @@ struct profile_data
 
     std::string get_coroutine_name(lua_State *L)
     {
-        scope_on_exit _([&]() {
-            if (!is_main_thread(L))
-            {
-                if (auto itr = coroutine_stack_map.find(L); itr != coroutine_stack_map.end())
-                {
-                    if (itr->second.empty())
-                    {
-                        coroutine_stack_map.erase(itr);
-                        if (auto itr = coroutine_name_map.find(L); itr != coroutine_name_map.end())
-                        {
-                            coroutine_name_map.erase(itr);
-                        }
-                    }
-                }
-                else
-                {
-                    if (auto itr = coroutine_name_map.find(L); itr != coroutine_name_map.end())
-                    {
-                        coroutine_name_map.erase(itr);
-                    }
-                }
-            }
-        });
         if (is_main_thread(L))
         {
             return "mainthread";
         }
+        auto top = lua_gettop(L);
+        scope_on_exit _([L, top]() {
+            lua_settop(L, top);
+        });
 
-        if (auto itr = coroutine_name_map.find(L); itr != coroutine_name_map.end())
+        lua_rawgetp(L, LUA_REGISTRYINDEX, reg_key());
+        lua_getuservalue(L, -1);
+        lua_pushthread(L);
+        lua_rawget(L, -2);
+
+        if (lua_isuserdata(L, -1))
         {
-            return itr->second;
+            auto ud = static_cast<coroutine_stack_userdata *>(luaL_checkudata(L, -1, coroutine_stack_metatable_name));
+            if (!ud->coroutine_name.empty())
+            {
+                return ud->coroutine_name;
+            }
         }
         return "coroutine:[?]";
     }
@@ -313,21 +317,45 @@ struct profile_data
         {
             return main_thread_stack;
         }
-        auto itr = coroutine_stack_map.find(L);
-        if (itr != coroutine_stack_map.end())
+        auto top = lua_gettop(L);
+        scope_on_exit _([L, top]() {
+            lua_settop(L, top);
+        });
+        lua_rawgetp(L, LUA_REGISTRYINDEX, reg_key());
+        lua_getuservalue(L, -1);
+        lua_pushthread(L);
+        lua_rawget(L, -2);
+
+        if (lua_isuserdata(L, -1))
         {
-            return itr->second;
+            auto ud = static_cast<coroutine_stack_userdata *>(luaL_checkudata(L, -1, coroutine_stack_metatable_name));
+            return ud->coroutine_stack;
         }
         else
         {
-            coroutine_stack_map.insert({L, std::stack<function_stack_node>()});
             if (name == nullptr)
             {
                 static std::stack<function_stack_node> dummy;
                 return dummy;
             }
-            coroutine_name_map.insert({L, fmt::format("coroutine:{}", *name)});
-            return coroutine_stack_map[L];
+            lua_pop(L, 1);
+            lua_pushthread(L);
+            auto ud = new (lua_newuserdata(L, sizeof(coroutine_stack_userdata))) coroutine_stack_userdata();
+            ud->coroutine_name = fmt::format("coroutine:{}", *name);
+            ud->pd = weak_from_this();
+
+            if (luaL_newmetatable(L, coroutine_stack_metatable_name))
+            {
+                lua_pushstring(L, "__gc");
+                lua_pushcfunction(L, coroutine_stack_userdata_gc);
+                lua_rawset(L, -3);
+            }
+            lua_setmetatable(L, -2);
+            assert(lua_istable(L, -3));
+            assert(lua_isthread(L, -2));
+            assert(lua_isuserdata(L, -1));
+            lua_rawset(L, -3);
+            return ud->coroutine_stack;
         }
     }
 
@@ -341,7 +369,8 @@ struct profile_data
     {
         size_t max_function_name_length = 0;
         traverse_tree<sort_t::none>(root, max_stack, [&](function_time_data_t &current, size_t current_statck) {
-            max_function_name_length = std::max(max_function_name_length, (current->function_name.length() + current_statck * per_indent_length));
+            max_function_name_length = std::max(max_function_name_length,
+                                                (current->function_name.length() + current_statck * per_indent_length));
         });
         return max_function_name_length;
     }
@@ -359,6 +388,37 @@ static int profile_data_gc(lua_State *L)
     return 0;
 }
 
+static int coroutine_stack_userdata_gc(lua_State *L)
+{
+    auto ud = static_cast<coroutine_stack_userdata *>(luaL_checkudata(L, -1, coroutine_stack_metatable_name));
+    if (!ud->pd.expired())
+    {
+        auto &coroutine_stack = ud->coroutine_stack;
+        bool is_tail_call_popped = false;
+
+        time_point_t begin_time = {};
+        if (!coroutine_stack.empty())
+        {
+            begin_time = coroutine_stack.top().last_record_time;
+        }
+
+        while (!coroutine_stack.empty())
+        {
+            calculate_time(coroutine_stack, begin_time, is_tail_call_popped);
+        }
+    }
+    ud->~coroutine_stack_userdata();
+
+    return 0;
+}
+
+static void Log(lua_State *L, std::string &str)
+{
+    lua_getglobal(L, "log");
+    lua_pushstring(L, str.c_str());
+    lua_call(L, 1, 0);
+}
+
 static std::shared_ptr<profile_data> get_or_new_pd_from_lua(lua_State *L)
 {
     auto top = lua_gettop(L);
@@ -370,12 +430,22 @@ static std::shared_ptr<profile_data> get_or_new_pd_from_lua(lua_State *L)
         auto dataptr = new (lua_newuserdata(L, sizeof(profile_data_userdata))) profile_data_userdata();
         pd = std::make_shared<profile_data>();
         dataptr->pd = pd;
-        if (luaL_newmetatable(L, "profile_data_metatable"))
+        if (luaL_newmetatable(L, profile_data_metatable_name))
         {
             lua_pushcfunction(L, profile_data_gc);
             lua_setfield(L, -2, "__gc");
         }
         lua_setmetatable(L, -2);
+        lua_newtable(L); // uservalue for coroutine stack map
+        if (luaL_newmetatable(L, weak_table_metatable_name))
+        {
+            lua_pushstring(L, "__mode");
+            lua_pushstring(L, "k");
+            lua_rawset(L, -3);
+        }
+        lua_setmetatable(L, -2);
+        lua_setuservalue(L, -2);
+
         lua_rawsetp(L, LUA_REGISTRYINDEX, profile_data::reg_key());
         pd->last_thread_of_hook = L;
         pd->last_thread = L;
@@ -404,11 +474,11 @@ struct auto_time
     {
         begin_time = record_clock_t::now();
         L = _L;
+        // std::this_thread::sleep_for(time_unit_t(100000000));
     }
     ~auto_time()
     {
         std::shared_ptr<profile_data> pd = get_or_new_pd_from_lua(L);
-
         scope_on_exit _([&]() {
             pd->last_thread_of_hook = L;
 
@@ -431,20 +501,10 @@ struct auto_time
             pd->last_thread = pd->last_thread_of_hook;
         }
 
-        // std::cout << std::endl
-        //           << fmt::format("f:{:<50}    e:{} l:{} mt:{:5} ll:{}",
-        //                          function_name,
-        //                          event,
-        //                          (const void *)L,
-        //                          pd->is_main_thread(L),
-        //                          (const void *)pd->last_thread)
-        //           << std::endl;
-
         // delay calculate tool time
         if (auto &last_function_data_stack = pd->get_function_data_stack(pd->last_thread_of_hook); !last_function_data_stack.empty())
         {
             last_function_data_stack.top().children_tool_time += (pd->last_tool_end - pd->last_tool_begin);
-            // std::cout << function_data_stack.top().function_name << "*************" << (pd->last_tool_end - pd->last_tool_begin).count() << std::endl;
         }
 
         function_time_data_t parent = nullptr;
@@ -490,13 +550,6 @@ struct auto_time
                 if (L != pd->last_thread_of_hook)
                 {
                     auto status = lua_status(pd->last_thread_of_hook);
-                    // std::cout << "###########################"
-                    //           << fmt::format("thread:{} status:{} ismain:{} isdead:{}",
-                    //                          (const void *)pd->last_thread_of_hook,
-                    //                          status,
-                    //                          pd->is_main_thread(pd->last_thread_of_hook),
-                    //                          is_couroutine_dead(L, pd->last_thread_of_hook))
-                    //           << std::endl;
 
                     if (is_couroutine_dead(L, pd->last_thread_of_hook))
                     {
@@ -508,12 +561,19 @@ struct auto_time
                         }
                     }
 
+                    if (auto &last_coroutine_stack = pd->get_function_data_stack(pd->last_thread_of_hook); !last_coroutine_stack.empty())
+                    {
+                        auto &top = last_coroutine_stack.top();
+                        top.last_record_time = begin_time;
+                    }
+
                     if (!function_data_stack.empty())
                     {
                         auto &top = function_data_stack.top();
                         top.children_coroutine_time += (begin_time - top.call_end_time);
                         function_time_data_t coroutine_function_data = nullptr;
                         std::string coroutine_function_name = pd->get_coroutine_name(pd->last_thread_of_hook);
+
                         auto itr = top.node->children.find(coroutine_function_name);
                         if (itr == top.node->children.end())
                         {
@@ -525,7 +585,7 @@ struct auto_time
                         {
                             coroutine_function_data = itr->second;
                         }
-                        coroutine_function_data->children_time += top.children_coroutine_time;
+                        coroutine_function_data->children_time += (top.children_coroutine_time);
                         coroutine_function_data->count++;
                     }
                 }
@@ -534,13 +594,11 @@ struct auto_time
                 while ((!function_data_stack.empty()) &&
                        (function_data_stack.top().function_source != function_source))
                 {
-                    // std::cout << function_source << "++++++++++++" << function_data_stack.top().function_name << "++++++++++++++" << function_data_stack.top().function_source << std::endl;
                     calculate_time(function_data_stack, begin_time, is_tail_call_popped);
                 }
 
                 if (function_data_stack.empty())
                 {
-                    // std::cout << "**************************" << std::endl;
                     return;
                 }
                 else
@@ -554,7 +612,6 @@ struct auto_time
                 // for taill call
                 while ((!function_data_stack.empty()) && is_tail_call_popped)
                 {
-                    // std::cout << function_source << "-------------------------" << function_data_stack.top().function_source << std::endl;
                     calculate_time(function_data_stack, begin_time, is_tail_call_popped);
                 }
             }
@@ -836,15 +893,6 @@ static int profile_report_info(lua_State *L)
     std::ostringstream os;
     os << fmt::format(" main_stack_size:{}",
                       pd->main_thread_stack.size());
-    size_t id = 0;
-    for (auto &&i : pd->coroutine_stack_map)
-    {
-        os << fmt::format(" thread[{}]_size:{}",
-                          id,
-                          i.second.size());
-        ++id;
-    }
-
     os << std::endl;
     lua_pushstring(L, os.str().c_str());
     return 1;
