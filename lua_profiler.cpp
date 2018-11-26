@@ -2,6 +2,7 @@
 #include <vector>
 #include <chrono>
 #include <unordered_map>
+#include <deque>
 #include <stack>
 #include <functional>
 #include <memory>
@@ -193,14 +194,24 @@ struct function_stack_node
     time_point_t call_begin_time = {};
     time_point_t call_end_time = {};
     time_point_t last_record_time = {};
+    time_point_t new_thread_begin_time = {};
     time_unit_t children_tool_time = {};
     time_unit_t children_pure_time = {};
     time_unit_t children_coroutine_time = {};
     function_time_data_t node = nullptr;
     bool is_tail_call = false;
 };
+template <typename T>
+struct stack_impl : std::deque<T>
+{
+    T &top() { return std::deque<T>::back(); }
+    void push(const T &__v) { std::deque<T>::push_back(__v); }
+    void pop() { std::deque<T>::pop_back(); }
+};
 
-static void calculate_time(std::stack<function_stack_node> &data_stack, const time_point_t &begin_time, bool &is_tail_call_popped)
+using function_stack_t = stack_impl<function_stack_node>;
+
+static void calculate_time(function_stack_t &data_stack, const time_point_t &begin_time, bool &is_tail_call_popped)
 {
     auto &current_top = data_stack.top();
     // this_all = this_tool_time + children + children_tool_time + self
@@ -213,6 +224,11 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
     current_top.node->children_time += current_top.children_pure_time;
     current_top.node->self_time += self_time;
     is_tail_call_popped = current_top.is_tail_call;
+    std::cout << fmt::format("\t\t{:30}   tt {:16}   ct {:16}",
+                             current_top.function_name,
+                             (tool_total_time).count(),
+                             current_top.children_tool_time.count())
+              << std::endl;
     data_stack.pop();
     if (!data_stack.empty())
     {
@@ -221,6 +237,35 @@ static void calculate_time(std::stack<function_stack_node> &data_stack, const ti
         top.children_pure_time += pure_sub_time;
         top.children_coroutine_time += coroutine_time;
     }
+}
+
+static time_unit_t calculate_coroutine_time(const function_stack_t &data_stack, const time_point_t &end_time, const time_point_t &before_time)
+{
+    time_unit_t time = end_time - before_time;
+    std::cout << time.count() << std::endl;
+    for (auto itr = data_stack.rbegin(); itr != data_stack.rend(); ++itr)
+    {
+        std::cout << "!@#$^&*(    " << itr->function_name << std::endl;
+        time -= itr->children_tool_time;
+        if (itr->call_begin_time < before_time)
+        {
+            break;
+        }
+        time -= itr->children_coroutine_time;
+        time -= (itr->call_end_time - itr->call_begin_time);
+    }
+    // for (const auto &data : data_stack)
+    // {
+    //     // if (data.call_begin_time < before_time)
+    //     // {
+    //     //     continue;
+    //     // }
+    //     time -= data.children_tool_time;
+    //     time -= data.children_coroutine_time;
+    //     time -= (data.call_end_time - data.call_begin_time);
+    //     std::cout << time.count() << std::endl;
+    // }
+    return time;
 }
 
 static size_t per_indent_length = 4;
@@ -232,7 +277,7 @@ static const char *weak_table_metatable_name = "profile_data_weak_table_metatabl
 
 struct coroutine_stack_userdata
 {
-    std::stack<function_stack_node> coroutine_stack;
+    function_stack_t coroutine_stack;
     std::string coroutine_name;
     std::weak_ptr<struct profile_data> pd;
 };
@@ -242,7 +287,7 @@ static int coroutine_stack_userdata_gc(lua_State *L);
 struct profile_data : std::enable_shared_from_this<profile_data>
 {
     function_time_data_t root = std::make_shared<function_time_data>();
-    std::stack<function_stack_node> main_thread_stack;
+    function_stack_t main_thread_stack;
     lua_State *last_thread_of_hook = nullptr;
     lua_State *last_thread = nullptr;
     lua_State *main_thread = nullptr;
@@ -311,7 +356,7 @@ struct profile_data : std::enable_shared_from_this<profile_data>
         root->total_time = root->children_time;
     }
 
-    std::stack<function_stack_node> &get_function_data_stack(lua_State *L, std::string *name = nullptr)
+    function_stack_t &get_function_data_stack(lua_State *L, std::string *name = nullptr)
     {
         if (is_main_thread(L))
         {
@@ -335,7 +380,7 @@ struct profile_data : std::enable_shared_from_this<profile_data>
         {
             if (name == nullptr)
             {
-                static std::stack<function_stack_node> dummy;
+                static function_stack_t dummy;
                 return dummy;
             }
             lua_pop(L, 1);
@@ -474,10 +519,12 @@ struct auto_time
     {
         begin_time = record_clock_t::now();
         L = _L;
-        // std::this_thread::sleep_for(time_unit_t(100000000));
     }
     ~auto_time()
     {
+        static int auto_inc_index = 1;
+        auto_inc_index++;
+        std::cout << (void *)L << " " << function_name << " " << event << " index " << auto_inc_index << std::endl;
         std::shared_ptr<profile_data> pd = get_or_new_pd_from_lua(L);
         scope_on_exit _([&]() {
             pd->last_thread_of_hook = L;
@@ -533,6 +580,16 @@ struct auto_time
                 }
             }
 
+            if (L != pd->last_thread_of_hook)
+            {
+                if (auto &last_coroutine_stack = pd->get_function_data_stack(pd->last_thread_of_hook); !last_coroutine_stack.empty())
+                {
+                    auto &top = last_coroutine_stack.top();
+                    top.new_thread_begin_time = begin_time;
+                    // std::cout << "***************************" << std::endl;
+                }
+            }
+
             if (event == LUA_HOOKCALL || event == LUA_HOOKTAILCALL)
             {
                 function_stack_node node;
@@ -543,13 +600,16 @@ struct auto_time
                 node.is_tail_call = (event == LUA_HOOKTAILCALL);
                 this_function_data->count++;
                 function_data_stack.push(node);
+                std::this_thread::sleep_for(time_unit_t(100000000 * auto_inc_index * auto_inc_index));
+
                 return;
             }
             else
             {
+                std::this_thread::sleep_for(time_unit_t(100000000 * auto_inc_index * auto_inc_index));
                 if (L != pd->last_thread_of_hook)
                 {
-                    auto status = lua_status(pd->last_thread_of_hook);
+                    // auto status = lua_status(pd->last_thread_of_hook);
 
                     if (is_couroutine_dead(L, pd->last_thread_of_hook))
                     {
@@ -561,16 +621,28 @@ struct auto_time
                         }
                     }
 
+                    time_unit_t last_piece_coroutine_time{};
                     if (auto &last_coroutine_stack = pd->get_function_data_stack(pd->last_thread_of_hook); !last_coroutine_stack.empty())
                     {
                         auto &top = last_coroutine_stack.top();
                         top.last_record_time = begin_time;
+
+                        if (!function_data_stack.empty())
+                        {
+                            last_piece_coroutine_time = calculate_coroutine_time(last_coroutine_stack, begin_time, function_data_stack.top().call_end_time);
+                        }
                     }
 
                     if (!function_data_stack.empty())
                     {
                         auto &top = function_data_stack.top();
-                        top.children_coroutine_time += (begin_time - top.call_end_time);
+                        auto this_coroutine_time = (begin_time - top.call_end_time);
+                        auto trans_function_time = top.new_thread_begin_time - top.call_end_time;
+                        // std::cout << "trans_function_time " << trans_function_time.count()
+                        //           << " top.new_thread_begin_time " << top.new_thread_begin_time.time_since_epoch().count()
+                        //           << " top.call_end_time " << top.call_end_time.time_since_epoch().count()
+                        //           << "  " << top.function_name << std::endl;
+                        top.children_coroutine_time += (this_coroutine_time - trans_function_time);
                         function_time_data_t coroutine_function_data = nullptr;
                         std::string coroutine_function_name = pd->get_coroutine_name(pd->last_thread_of_hook);
 
@@ -585,7 +657,8 @@ struct auto_time
                         {
                             coroutine_function_data = itr->second;
                         }
-                        coroutine_function_data->children_time += (top.children_coroutine_time);
+                        coroutine_function_data->children_time += (last_piece_coroutine_time - trans_function_time);
+                        // std::cout << "#######################" << last_piece_coroutine_time.count() << std::endl;
                         coroutine_function_data->count++;
                     }
                 }
