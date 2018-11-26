@@ -3,7 +3,7 @@
 # Form implementation generated from reading ui file 'e:\cdsama-git\LuaProfiler\json_viewer_window.ui',
 # licensing of 'e:\cdsama-git\LuaProfiler\json_viewer_window.ui' applies.
 #
-# Created: Wed Nov 21 11:08:04 2018
+# Created: Mon Nov 26 12:23:10 2018
 #      by: pyside2-uic  running on PySide2 5.11.2
 #
 # WARNING! All changes made in this file will be lost!
@@ -37,6 +37,9 @@ class Ui_MainWindow(object):
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.treeWidget.sizePolicy().hasHeightForWidth())
         self.treeWidget.setSizePolicy(sizePolicy)
+        font = QtGui.QFont()
+        font.setPointSize(12)
+        self.treeWidget.setFont(font)
         self.treeWidget.setObjectName("treeWidget")
         self.treeWidget.headerItem().setText(0, "1")
         self.treeWidget.header().setCascadingSectionResizes(True)

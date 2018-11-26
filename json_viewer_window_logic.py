@@ -3,9 +3,12 @@
 
 import json
 import math
+
 from PySide2.QtCore import Qt
-from PySide2.QtGui import QDragEnterEvent, QDropEvent, QBrush, QColor, QFont, QFontDatabase
+from PySide2.QtGui import (QBrush, QColor, QDragEnterEvent, QDropEvent,
+                           QFontDatabase)
 from PySide2.QtWidgets import QHeaderView, QMainWindow, QTreeWidgetItem
+
 from json_viewer_window import Ui_MainWindow
 
 
@@ -33,9 +36,10 @@ class MainWindow(QMainWindow):
              "Self (nanoseconds)",
              "Children (nanoseconds)"])
         self.setAcceptDrops(True)
-        self.mono_space_font: QFont = QFontDatabase.systemFont(
+        default_font_size = self.ui_window.treeWidget.font().pointSize()
+        self.mono_space_font = QFontDatabase.systemFont(
             QFontDatabase.FixedFont)
-        self.mono_space_font.setPointSize(13)
+        self.mono_space_font.setPointSize(default_font_size)
         self.top_item = None
         self.ui_window.treeWidget.itemDoubleClicked.connect(
             on_item_double_clicked)
