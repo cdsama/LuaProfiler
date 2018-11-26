@@ -3,7 +3,7 @@
 # Form implementation generated from reading ui file 'e:\cdsama-git\LuaProfiler\json_viewer_window.ui',
 # licensing of 'e:\cdsama-git\LuaProfiler\json_viewer_window.ui' applies.
 #
-# Created: Mon Nov 26 17:14:23 2018
+# Created: Mon Nov 26 21:01:33 2018
 #      by: pyside2-uic  running on PySide2 5.11.2
 #
 # WARNING! All changes made in this file will be lost!
@@ -20,6 +20,9 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(MainWindow.sizePolicy().hasHeightForWidth())
         MainWindow.setSizePolicy(sizePolicy)
         MainWindow.setMaximumSize(QtCore.QSize(16777215, 16777215))
+        font = QtGui.QFont()
+        font.setPointSize(10)
+        MainWindow.setFont(font)
         MainWindow.setLayoutDirection(QtCore.Qt.LeftToRight)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -57,13 +60,20 @@ class Ui_MainWindow(object):
         self.tabWidget.addTab(self.tree_tab, "")
         self.list_tab = QtWidgets.QWidget()
         self.list_tab.setObjectName("list_tab")
+        self.verticalLayout_3 = QtWidgets.QVBoxLayout(self.list_tab)
+        self.verticalLayout_3.setObjectName("verticalLayout_3")
+        self.listWidget = QtWidgets.QTreeWidget(self.list_tab)
+        font = QtGui.QFont()
+        font.setPointSize(12)
+        self.listWidget.setFont(font)
+        self.listWidget.setObjectName("listWidget")
+        self.listWidget.headerItem().setText(0, "1")
+        self.listWidget.header().setCascadingSectionResizes(True)
+        self.listWidget.header().setStretchLastSection(False)
+        self.verticalLayout_3.addWidget(self.listWidget)
         self.tabWidget.addTab(self.list_tab, "")
         self.verticalLayout.addWidget(self.tabWidget)
         MainWindow.setCentralWidget(self.centralwidget)
-        self.menubar = QtWidgets.QMenuBar(MainWindow)
-        self.menubar.setGeometry(QtCore.QRect(0, 0, 1280, 21))
-        self.menubar.setObjectName("menubar")
-        MainWindow.setMenuBar(self.menubar)
         self.statusbar = QtWidgets.QStatusBar(MainWindow)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         sizePolicy.setHorizontalStretch(0)
@@ -74,11 +84,12 @@ class Ui_MainWindow(object):
         MainWindow.setStatusBar(self.statusbar)
 
         self.retranslateUi(MainWindow)
-        self.tabWidget.setCurrentIndex(0)
+        self.tabWidget.setCurrentIndex(1)
         QtCore.QMetaObject.connectSlotsByName(MainWindow)
 
     def retranslateUi(self, MainWindow):
         MainWindow.setWindowTitle(QtWidgets.QApplication.translate("MainWindow", "Lua Profiler Json Viewer", None, -1))
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tree_tab), QtWidgets.QApplication.translate("MainWindow", "Tree View", None, -1))
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.list_tab), QtWidgets.QApplication.translate("MainWindow", "List View", None, -1))
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tree_tab), QtWidgets.QApplication.translate("MainWindow", "Call Stack Top", None, -1))
+        self.listWidget.setSortingEnabled(False)
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.list_tab), QtWidgets.QApplication.translate("MainWindow", "Function Time Top", None, -1))
 
