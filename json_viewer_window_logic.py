@@ -25,23 +25,23 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.ui_window = Ui_MainWindow()
-        self.ui_window.setupUi(self)
-        self.ui_window.treeWidget.header().setSectionResizeMode(
+        self.window = Ui_MainWindow()
+        self.window.setupUi(self)
+        self.window.treeWidget.header().setSectionResizeMode(
             QHeaderView.ResizeToContents)
-        self.ui_window.treeWidget.setHeaderLabels(
+        self.window.treeWidget.setHeaderLabels(
             ["Function Name",
              "Count",
              "Total (nanoseconds)",
              "Self (nanoseconds)",
              "Children (nanoseconds)"])
         self.setAcceptDrops(True)
-        default_font_size = self.ui_window.treeWidget.font().pointSize()
+        default_font_size = self.window.treeWidget.font().pointSize()
         self.mono_space_font = QFontDatabase.systemFont(
             QFontDatabase.FixedFont)
         self.mono_space_font.setPointSize(default_font_size)
         self.top_item = None
-        self.ui_window.treeWidget.itemDoubleClicked.connect(
+        self.window.treeWidget.itemDoubleClicked.connect(
             on_item_double_clicked)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -60,12 +60,12 @@ class MainWindow(QMainWindow):
         """ read file to json """
         with open(file_name, 'r') as file:
             json_dict = json.load(file)
-            self.handle_json_dict(json_dict)
+            self.handle_json_to_tree(json_dict)
 
-    def handle_json_dict(self, root):
+    def handle_json_to_tree(self, root):
         """ change json dict to item """
         if self.top_item:
-            root_item = self.ui_window.treeWidget.invisibleRootItem()
+            root_item = self.window.treeWidget.invisibleRootItem()
             root_item.removeChild(self.top_item)
             self.top_item = None
         stack = []
@@ -78,8 +78,7 @@ class MainWindow(QMainWindow):
             if current is None:
                 current_stack = current_stack - 1
                 continue
-            parent_size = current_stack
-            while len(item_stack) > parent_size:
+            while len(item_stack) > current_stack:
                 item_stack.pop()
             item = QTreeWidgetItem(None, [current["function_name"],
                                           str(current["count"]),
@@ -88,7 +87,7 @@ class MainWindow(QMainWindow):
                                           str(current["children_time"])])
             current_total_time = current["total_time"]
             color = 255
-            if current_total_time <= total_time and current_total_time > 0:
+            if 0 < current_total_time <= total_time:
                 color = 255*(1 - math.sqrt(current_total_time / total_time))
             brush = QBrush(QColor(255, color, color))
             item.setBackground(0, brush)
@@ -97,16 +96,14 @@ class MainWindow(QMainWindow):
                 item.setBackground(column_index, brush)
                 item.setFont(column_index, self.mono_space_font)
             if current_stack == 0:
-                self.ui_window.treeWidget.addTopLevelItem(item)
+                self.window.treeWidget.addTopLevelItem(item)
                 self.top_item = item
             else:
-                parent = item_stack[-1]
-                parent.addChild(item)
+                item_stack[-1].addChild(item)
             item_stack.append(item)
             if "children" not in current:
                 continue
             stack.append(None)
             current_stack = current_stack + 1
-            children = current["children"]
-            for child in children[::-1]:
+            for child in current["children"][::-1]:
                 stack.append(child)
