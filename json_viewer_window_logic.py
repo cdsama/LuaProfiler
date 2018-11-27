@@ -131,7 +131,7 @@ class MainWindow(QMainWindow):
                 old_obj = self.list_dict[current_source]
                 current_name = current["function_name"]
                 if old_obj["function_name"] != current_name:
-                    if current_name.startswith("?"):
+                    if not current_name.startswith("?"):
                         old_obj["function_name"] = current_name
                 old_obj["count"] += current["count"]
                 old_obj["total_time"] += current["total_time"]
