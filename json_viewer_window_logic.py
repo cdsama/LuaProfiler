@@ -40,7 +40,7 @@ def get_brush(val, max_val):
     """ get color brush for item value """
     color = 255
     if 0 < val <= max_val:
-        color = 255*(1 - math.pow(val / max_val, 0.6))
+        color = 255*(1 - math.pow(val / max_val, 0.75))
     return QBrush(QColor(255, color, color))
 
 
@@ -70,6 +70,8 @@ class MainWindow(QMainWindow):
 
     def section_clicked(self, index):
         """ sort section """
+        if index == 0:
+            return
         self.window.listWidget.sortItems(index, Qt.DescendingOrder)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -113,7 +115,7 @@ class MainWindow(QMainWindow):
                 item.setData(column_index, Qt.DisplayRole,
                              item_data[column_index])
             self.window.listWidget.addTopLevelItem(item)
-        self.window.listWidget.sortItems(3, Qt.DescendingOrder)
+        self.window.listWidget.sortItems(2, Qt.DescendingOrder)
 
     def handle_dict_to_list(self, root):
         """ change json dict to item """

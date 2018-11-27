@@ -113,4 +113,11 @@ just drag `*.lua_profile_json.txt` to main window.
 2. double click to expand the first child recursively
 3. double click to fold
 
-![test_result](test_result.png)
+![test_result](test_result_tree.png)
+
+#### Function time list
+
+1. click `Function Time Top` to change tab
+2. click header to sort column to descending order
+
+![test_result](test_result_list.png)
